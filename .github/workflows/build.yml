@@ -62,3 +62,56 @@ jobs:
           cp proj/store/icon-512.png out/ || true
           cp shots/* out/ || true
           gh release create "build-${{ github.run_number }}" out/* --title "Build ${{ github.run_number }}" --notes "Test build ${{ github.run_number }} (commit ${{ github.sha }})" --prerelease
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack the iPhone project
+        run: unzip -o -q ios.zip -d ios && ls -R ios | head -50
+      - name: Tools
+        run: |
+          brew install xcodegen
+          xcodebuild -version
+      - name: Make the Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Pick a virtual iPhone
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys,re
+          d=json.load(sys.stdin)['devices']
+          c=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')]
+          plain=[x for x in c if re.fullmatch(r'iPhone 1[5-9]', x['name'])]
+          pick=(plain or c)[-1]
+          print(pick['udid'])
+          print(pick['name'], file=sys.stderr)")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: ios
+        run: |
+          rc=0; xcodebuild -project LAGGames.xcodeproj -scheme LAGGames -configuration Debug -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO build > build.log 2>&1 || rc=$?
+          grep -E "error:|warning:|BUILD" build.log | head -100
+          [ $rc -eq 0 ] || exit $rc
+          # a delegate method whose shape does not match is never called — never let that pass quietly
+          if grep -E "nearly matches|will never be executed" build.log; then echo "A delegate method does not match its protocol"; exit 1; fi
+      - name: Tests (the App Store bridge against Xcode's test store, and where links go)
+        working-directory: ios
+        run: |
+          rc=0; xcodebuild -project LAGGames.xcodeproj -scheme LAGGames -configuration Debug -destination "id=$UDID" -derivedDataPath build CODE_SIGNING_ALLOWED=NO test > test.log 2>&1 || rc=$?
+          grep -E "Test Case|error:|TEST (SUCCEEDED|FAILED)|Executed" test.log | head -150
+          exit $rc
+      - name: Run it on the virtual iPhone
+        if: always()
+        run: bash ios/ios-test.sh
+      - name: Publish the screenshots
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p iout
+          cp ishots/* iout/ 2>/dev/null || true
+          cp ios/build.log iout/ios-build.log 2>/dev/null || true
+          cp ios/test.log iout/ios-test.log 2>/dev/null || true
+          gh release create "ios-${{ github.run_number }}" iout/* --title "iPhone build ${{ github.run_number }}" --notes "iPhone simulator build ${{ github.run_number }} (commit ${{ github.sha }})" --prerelease
