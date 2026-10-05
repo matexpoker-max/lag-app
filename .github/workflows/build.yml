@@ -23,8 +23,17 @@ jobs:
           pip install --quiet pillow
           curl -fsSL -o logo.png https://lifesagambol.com/images/logo.png
           cd proj && python3 make_icons.py ../logo.png
+      - name: The upload key (only when its secrets are set — never from the repo)
+        env:
+          KS: ${{ secrets.UPLOAD_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then echo "$KS" | base64 -d > "$RUNNER_TEMP/upload.jks"; echo "UPLOAD_KEYSTORE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"; echo "signed=yes"; else echo "signed=no (the bundle is unsigned)"; fi
       - name: Build
         working-directory: proj
+        env:
+          UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
         run: gradle --no-daemon --stacktrace assembleDebug bundleRelease
       - name: Turn on the emulator's speed-up
         run: |
@@ -48,7 +57,8 @@ jobs:
         run: |
           mkdir -p out
           cp proj/app/build/outputs/apk/debug/app-debug.apk out/lifesagambol-test.apk || true
-          cp proj/app/build/outputs/bundle/release/app-release.aab out/lifesagambol-unsigned.aab || true
+          if [ -n "$UPLOAD_KEYSTORE" ]; then cp proj/app/build/outputs/bundle/release/app-release.aab out/lifesagambol-release.aab || true; else cp proj/app/build/outputs/bundle/release/app-release.aab out/lifesagambol-unsigned.aab || true; fi
+          rm -f "$RUNNER_TEMP/upload.jks" || true
           cp proj/store/icon-512.png out/ || true
           cp shots/* out/ || true
           gh release create "build-${{ github.run_number }}" out/* --title "Build ${{ github.run_number }}" --notes "Test build ${{ github.run_number }} (commit ${{ github.sha }})" --prerelease
